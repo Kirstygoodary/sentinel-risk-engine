@@ -1,35 +1,41 @@
 # Adaptive Transaction Risk Engine
 
-[![CI](https://github.com/<your-username>/<repo-name>/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-username>/<repo-name>/actions/workflows/ci.yml)
+[![CI](https://github.com/Kirstygoodary/sentinel-risk-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Kirstygoodary/sentinel-risk-engine/actions/workflows/ci.yml)
 
 > Real-time, multi-signal fraud/risk scoring with **graduated, reversible
 > enforcement** (adaptive escrow). A clean-room reference implementation in
 > TypeScript / NestJS.
 
-*This is a clean-room reimplementation of a fraud/risk architecture I designed
-and shipped in a previous role. It was rebuilt from scratch — from architectural
-principles, not source — using no prior-employer code, data, or proprietary
-parameters. All thresholds and model constants here are re-derived and tuned on
-synthetic data. It's deliberately kept domain-agnostic (generic "transactions"
-and "accounts") to demonstrate the engineering without reproducing any specific
-product.*
+*This is a clean reimplementation of a fraud/risk architecture I designed and
+shipped in a previous role. The feature in this repo was rebuilt from scratch,
+without any prior product code or data — all thresholds and model constants are
+re-derived and tuned on synthetic data. It uses domain-agnostic terms and is for
+showcasing purposes only.*
 
 ---
 
 ## The problem
 
-When money moves on a delay-settled platform — a marketplace payout, a creator
-withdrawal, a merchant settlement — you can't yet know if the underlying payment
-is fraudulent. A chargeback can arrive **months** later. Pay out immediately and
-you eat the loss; hold everyone's money "just in case" and you punish the honest
-majority with friction.
+This is a predictive risk engine for money movement on a delayed-settlement
+platform — a marketplace payout, a creator withdrawal, a merchant settlement.
+When the money moves you can't yet know if the underlying payment is fraudulent:
+a chargeback can arrive **months** later. Pay out immediately and you eat the
+loss; hold everyone's money "just in case" and you punish the honest majority
+with friction.
 
-This engine's answer: **score each transaction from several independent signals,
-then apply a hold whose length scales with risk** — short for clean activity,
-long enough on risky activity that a chargeback almost always lands *before* the
-funds are released (so the hold can be cancelled instead of paying out fraud).
-Accounts that prove themselves clear faster over time; accounts that rack up
-realized losses are paused.
+The engine scores each transaction with several independent signals, each
+identifying a different layer of risk, and then applies a hold. The hold length
+scales with risk — shorter holds for low risk, longer holds for high risk. Holds
+span **30–120 days by risk tier**, so funds aren't released until the typical
+chargeback window has largely passed: a risky payment is held long enough that a
+chargeback almost always lands *before* the funds are released, and the hold can
+be cancelled instead of paying out fraud. The engine forgives accounts with a
+long, clean history and flags accounts with a short history faster.
+
+> **Scope note:** in the original system this engine ran on top of **Stripe**,
+> which handled escrow, KYC onboarding, and withdrawals. That KYC/Stripe
+> integration is intentionally **not** included in this clean-room repo — the
+> focus here is the risk-scoring and adaptive-hold engine itself.
 
 ## Architecture
 
