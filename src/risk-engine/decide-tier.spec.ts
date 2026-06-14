@@ -19,43 +19,44 @@ const sig = (over: Partial<SignalResult>): SignalResult => ({
 
 describe('decideTier', () => {
   it('returns CLEAR/DEFAULT when no signals are present', () => {
-    const input: RiskDecisionInput = {};
-    // [fill: expect decideTier(input).tier === 'CLEAR' and tierSource 'DEFAULT']
-    expect(() => decideTier(input)).toBeDefined();
+    const decision = decideTier({});
+    expect(decision.tier).toBe('CLEAR');
+    expect(decision.tierSource).toBe('DEFAULT');
+    expect(decision.autoPause).toBe(false);
   });
 
   it('takes the MAX tier across present signals (most cautious wins)', () => {
-    const input: RiskDecisionInput = {
+    const decision = decideTier({
       ml: sig({ source: 'ML', tier: 'WATCH' }),
       outlier: sig({ source: 'OUTLIER', tier: 'T2' }),
-    };
-    // [fill: expect tier === 'T2', tierSource === 'OUTLIER']
-    expect(input).toBeDefined();
+    });
+    expect(decision.tier).toBe('T2');
+    expect(decision.tierSource).toBe('OUTLIER');
+    expect(decision.autoPause).toBe(false);
   });
 
   it('GUARDRAIL overrides everything and forces auto-pause', () => {
-    const input: RiskDecisionInput = {
+    const decision = decideTier({
       ml: sig({ source: 'ML', tier: 'CLEAR' }),
       guardrail: sig({ source: 'GUARDRAIL', tier: 'T3', autoPause: true }),
-    };
-    // [fill: expect autoPause === true, tierSource === 'GUARDRAIL']
-    expect(input).toBeDefined();
+    });
+    expect(decision.autoPause).toBe(true);
+    expect(decision.tierSource).toBe('GUARDRAIL');
   });
 
   it('a Bayesian auto-pause beats a higher tier from another signal', () => {
-    const input: RiskDecisionInput = {
+    const decision = decideTier({
       outlier: sig({ source: 'OUTLIER', tier: 'T3' }),
       bayesian: sig({ source: 'BAYESIAN', tier: 'T1', autoPause: true }),
-    };
-    // [fill: expect autoPause === true, tierSource === 'BAYESIAN']
-    expect(input).toBeDefined();
+    });
+    expect(decision.autoPause).toBe(true);
+    expect(decision.tierSource).toBe('BAYESIAN');
   });
 
   it('never leaks a raw score into humanReason', () => {
-    const input: RiskDecisionInput = {
+    const decision = decideTier({
       outlier: sig({ source: 'OUTLIER', tier: 'T2', detail: 'madScore=87.3' }),
-    };
-    // [fill: expect decideTier(input).humanReason NOT to contain '87.3']
-    expect(input).toBeDefined();
+    });
+    expect(decision.humanReason).not.toContain('87.3');
   });
 });
