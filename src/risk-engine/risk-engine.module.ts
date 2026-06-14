@@ -1,19 +1,17 @@
 import { Module } from '@nestjs/common';
+import { EscrowModule } from '../escrow/escrow.module';
+import { PrismaService } from '../common/prisma.service';
 import { RiskEngineService } from './risk-engine.service';
 
 /**
- * The risk engine: collects signals for a transaction, runs the four scorers,
- * combines them via decideTier(), and hands the verdict to escrow.
- *
- * [fill: add the scorer files as you build them —
- *   scorers/outlier.ts   (MAD vs the account's own history)
- *   scorers/bayesian.ts  (per-account posterior from clean vs charged-back history)
- *   scorers/guardrail.ts (late-loss tripwire)
- *   ml is an inbound field, not computed here.
- *  Keep each scorer a pure function over data you pass in, so they're unit-testable.]
+ * The risk engine: collects signals for a transaction, runs the four scorers
+ * (src/risk-engine/scorers/*), combines them via decideTier(), persists the
+ * verdict, and hands it to escrow. Each scorer is a pure function over data the
+ * orchestrator passes in, so the scoring logic is unit-tested in isolation.
  */
 @Module({
-  providers: [RiskEngineService],
+  imports: [EscrowModule],
+  providers: [PrismaService, RiskEngineService],
   exports: [RiskEngineService],
 })
 export class RiskEngineModule {}
