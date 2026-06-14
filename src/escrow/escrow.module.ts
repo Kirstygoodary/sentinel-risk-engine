@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { LedgerModule } from '../ledger/ledger.module';
+import { PrismaService } from '../common/prisma.service';
 import { EscrowService } from './escrow.service';
 
 /**
@@ -8,7 +9,7 @@ import { EscrowService } from './escrow.service';
  */
 @Module({
   imports: [LedgerModule],
-  providers: [EscrowService],
+  providers: [PrismaService, EscrowService],
   exports: [EscrowService],
 })
 export class EscrowModule {}
