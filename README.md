@@ -1,6 +1,6 @@
 # Adaptive Transaction Risk Engine
 
-[![CI](https://github.com/[fill: your-gh-username]/[fill: repo-name]/actions/workflows/ci.yml/badge.svg)](https://github.com/[fill: your-gh-username]/[fill: repo-name]/actions/workflows/ci.yml)
+[![CI](https://github.com/<your-username>/<repo-name>/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-username>/<repo-name>/actions/workflows/ci.yml)
 
 > Real-time, multi-signal fraud/risk scoring with **graduated, reversible
 > enforcement** (adaptive escrow). A clean-room reference implementation in
@@ -9,7 +9,7 @@
 *This is a clean-room reimplementation of a fraud/risk architecture I designed
 and shipped in a previous role. It was rebuilt from scratch — from architectural
 principles, not source — using no prior-employer code, data, or proprietary
-parameters. All thresholds and model constants are re-derived and tuned on
+parameters. All thresholds and model constants here are re-derived and tuned on
 synthetic data. It's deliberately kept domain-agnostic (generic "transactions"
 and "accounts") to demonstrate the engineering without reproducing any specific
 product.*
@@ -18,14 +18,18 @@ product.*
 
 ## The problem
 
-`[fill: 2-3 sentences in your own words. The core tension: when money moves
-(a settlement, a payout, a withdrawal) you can't yet know if it's fraudulent —
-the chargeback arrives days later. Pay out immediately → eat the fraud. Hold
-everything → punish good customers and add friction.]`
+When money moves on a delay-settled platform — a marketplace payout, a creator
+withdrawal, a merchant settlement — you can't yet know if the underlying payment
+is fraudulent. A chargeback can arrive **months** later. Pay out immediately and
+you eat the loss; hold everyone's money "just in case" and you punish the honest
+majority with friction.
 
-**The approach here:** score each transaction from multiple independent signals,
-then apply a *graduated, reversible* hold whose length scales with risk — and
-that lifts automatically as an account proves itself.
+This engine's answer: **score each transaction from several independent signals,
+then apply a hold whose length scales with risk** — short for clean activity,
+long enough on risky activity that a chargeback almost always lands *before* the
+funds are released (so the hold can be cancelled instead of paying out fraud).
+Accounts that prove themselves clear faster over time; accounts that rack up
+realized losses are paused.
 
 ## Architecture
 
@@ -34,81 +38,134 @@ Transaction ─► [ Signal collection ]
         ┌────────────┬──────────────┬───────────────┐
         ▼            ▼              ▼               ▼
    [ ML signal ] [ Outlier ]  [ Bayesian ]   [ Guardrail ]
-                  (MAD vs the   (per-account   (late-loss
-                  account's     risk from      hard tripwire)
-                  own history)  its history)
+   (3rd-party    (MAD vs the   (per-account   (late-loss
+    verdict)     account's     risk from      hard tripwire)
+                 own history)  its history)
         └────────────┴──────────────┴───────────────┘
                      ▼
-            [ Decision engine ]  pure fn, override-ordered:
-                     │            guardrail > auto-pause > max(others)
+            [ Decision engine ]   pure fn, override-ordered:
+                     │             guardrail > auto-pause > max(others)
                      ▼
          Risk tier: CLEAR · WATCH · T1 · T2 · T3
                      ▼
-        [ Adaptive escrow ]  tier → hold duration → scheduled release;
-                     │        auto-pause repeat offenders; rehab-lift on trust
+        [ Adaptive escrow ]   tier → hold duration → scheduled release;
+                     │         auto-pause repeat offenders; reverse on loss
                      ▼
-              [ Double-entry ledger ]  every movement auditable + reversible
+        [ Double-entry ledger ]   every movement auditable + reversible
 ```
 
-### Design decisions (the rationale — be ready to defend each)
-- **Shadow mode first.** `[fill: scores everything, acts on nothing until
-  calibrated. Why: honest cold-start, no false pauses on day one.]`
-- **Graduated + reversible.** `[fill: severity scales with risk; every action
-  undoable. Why this is the right posture for fraud + compliance.]`
-- **Explainable by default.** `[fill: every verdict carries a human-readable
-  reason; raw scores never leak. Why: disputes, audits, trust.]`
-- **Statistics for detection (not an LLM).** `[fill: scoring is deterministic
-  and auditable. Knowing what NOT to put an LLM on is the point.]`
-- **Money as a double-entry ledger, not a balance column.** `[fill: why —
-  auditability, reversibility, provable figures.]`
+### Design decisions (the rationale — each is a deliberate trade-off)
+
+- **Statistics for detection, not an LLM.** Scoring is deterministic and
+  auditable — essential when the output moves money and has to be explained in a
+  dispute. The ML signal is an *inbound* third-party verdict we fold in, not
+  something guessed by a model at decision time.
+- **MAD, not mean/standard-deviation, for outlier detection.** Median Absolute
+  Deviation is robust to outliers — and fraud *is* the outlier, so the baseline
+  must not be dragged by it. The MAD floor is **proportionate to the account's
+  own median spend**, so a steady high-value account isn't hypersensitive to
+  tiny wobbles.
+- **Act on patterns, not single events.** A lone chargeback can be a legitimate
+  dispute (faulty goods, buyer-side "friendly fraud"). The Bayesian layer does
+  not penalise a single isolated chargeback; the guardrail requires *both*
+  material realized losses *and* a late-chargeback pattern before it trips.
+- **Trust is capped.** Cleared volume lowers an account's risk — but with a cap,
+  so a fraudster can't wash a bad history by flooding the system with small clean
+  orders.
+- **Graduated and reversible.** Severity scales with risk, and every action is
+  undoable: a reversal is an equal-and-opposite ledger posting, never a
+  destructive edit.
+- **Shadow mode first.** `RISK_SHADOW_MODE=true` (the default) scores everything
+  and records the verdict, but moves no money. This is the honest cold-start
+  posture: calibrate against real outcomes before enforcing, so you don't
+  false-pause real accounts on day one.
+- **Explainable by default.** Every verdict carries a creator-safe
+  `humanReason`; raw scores and internal codes never leak to the account holder.
+- **Money as a double-entry ledger, not a balance column.** Balances are derived
+  by summing entries, so every figure is provable and every movement auditable.
 
 ### The four signals
+
 | Signal | Detects | Technique |
 |---|---|---|
-| ML | 3rd-party verdict on the transaction | `[fill]` |
-| Outlier | Value abnormal vs the account's *own* history | Median Absolute Deviation `[fill: floor, window]` |
-| Bayesian | Account risk given its full history | `[fill: posterior; trust accrues with proven clean volume]` |
-| Guardrail | Late-arriving losses | `[fill: realized-loss threshold + late-CB count]` |
+| **ML** | Risk on this specific transaction | Maps a 3rd-party verdict (NONE/LOW/MEDIUM/HIGH) → tier |
+| **Outlier** | Value abnormal vs the account's *own* history | Median Absolute Deviation; cold-start guard (min history); proportionate floor |
+| **Bayesian** | How risky the account is, given its full history | Log-odds update: chargebacks raise risk, capped cleared-volume "trust" lowers it; auto-pause threshold |
+| **Guardrail** | Active, realized losses slipping past holds | Hard tripwire: fires only on material realized loss **and** a late-chargeback pattern |
 
-> ⚠️ Every threshold/prior here is re-derived from first principles and tuned on
+> All thresholds/priors are re-derived from first principles and tuned on
 > synthetic data — not lifted from any prior system.
 
-## Tech
-
-- **Stack:** TypeScript, NestJS (controller → service → repository), PostgreSQL + Prisma.
-- NestJS is structurally Spring-for-Node — DI, modules, guards/interceptors,
-  decorators — so the patterns map directly to Java/Spring.
-- `[fill: OPTIONAL but high-value for a staff role — a "how I'd scale this"
-  paragraph: async scored-event stream (Kafka) instead of sync scoring,
-  idempotency on the money path, real-time vs batch, observability
-  (Datadog/Grafana), the consistency model for holds/releases. Prose is fine;
-  it shows distributed-systems judgement.]`
-
-## Running it
+## See it work
 
 ```bash
 pnpm install
 cp .env.example .env
 pnpm db:up               # Postgres via Docker (host port 5433)
 pnpm prisma:migrate      # apply schema
-pnpm seed                # synthetic accounts + transactions
-pnpm start:dev           # http://localhost:3000/api
-pnpm test                # unit tests (the decision engine + ledger invariants)
+RISK_SHADOW_MODE=false pnpm seed   # enforce mode, so verdicts/pauses fire
 ```
 
-`[fill: once built, add a 3-line "happy path" — e.g. POST a transaction, show the
-JSON verdict + the resulting hold. This is what a reviewer reads even if they
-never run it.]`
+The seed walks five accounts, each exercising a different signal, and prints the
+engine's verdict for a fresh transaction on each:
+
+```
+  ▸ Steady clean account
+      verdict : CLEAR  (source: DEFAULT)
+  ▸ Sudden high-value outlier
+      verdict : T3  (source: OUTLIER)
+  ▸ Repeat chargeback pattern
+      verdict : WATCH  (source: BAYESIAN)
+  ▸ High ML risk on the transaction
+      verdict : T3  (source: ML)
+  ▸ Late-loss guardrail tripped
+      verdict : T3  (source: GUARDRAIL, AUTO-PAUSE)
+```
 
 ## Tests
 
-`[fill: what's covered. Lead with the decision-engine rules (pure-function tests)
-and the ledger double-entry invariant (debits == credits) — those are the
-correctness signals that matter for money/fraud code.]`
+```bash
+pnpm test     # 38 unit tests across 7 suites
+```
 
-## What I'd do next / known limitations
+Coverage is concentrated where correctness matters most:
+- **Decision engine** — each override rule (guardrail wins; auto-pause beats a
+  higher tier; max-tier otherwise; clear by default; no raw score leaks).
+- **Each scorer** — including the edge cases: MAD robustness to a single spike,
+  divide-by-zero on constant history, the "single chargeback isn't penalised"
+  rule, the trust cap, the guardrail's both-conditions requirement.
+- **Ledger** — refuses an unbalanced posting; derives balances correctly.
+- **Escrow** — shadow mode moves no money; a matured hold is **not** released
+  while the account is paused; release/reverse behave and are idempotent.
 
-`[fill: honesty = seniority. e.g. scoring is synchronous (prod → async event
-stream); constants tuned on synthetic not real data; no device-fingerprint layer
-(deferred — needs a rarity-weighted similarity model to be meaningful, not a
-blunt exact-match).]`
+The DB-touching layers (ledger, escrow) mock Prisma so the full suite runs in CI
+without a database.
+
+## Tech
+
+- **Stack:** TypeScript, NestJS (module → service → repository), PostgreSQL + Prisma.
+- NestJS is structurally Spring-for-Node — dependency injection, modules,
+  decorators, guards/interceptors — so these patterns map directly to Java/Spring.
+- The scoring core (`src/risk-engine/scorers/*`, `decide-tier.ts`) is pure and
+  framework-free, so it's testable in isolation and portable.
+
+## How I'd take this to production
+
+- **Async scoring.** Today scoring is synchronous in the request path; at scale
+  it becomes a `transaction.created → scored → action` event stream (e.g. Kafka),
+  with idempotency keys on the money path.
+- **Recompute on new evidence.** Account-level signals (Bayesian, guardrail)
+  should recompute when a chargeback/refund webhook arrives, not only at
+  transaction time — and lift pauses automatically once an account rehabilitates.
+- **Observability.** Per-signal firing rates, tier distribution, and
+  shadow-vs-enforce divergence as first-class metrics — the calibration dashboard
+  is how you decide it's safe to leave shadow mode.
+
+## Known limitations
+
+- Constants are tuned on synthetic, not real, data — production needs calibration
+  against a labelled outcome stream.
+- Scoring is synchronous (see "to production" above).
+- No device/identity-fingerprint signal: a naive exact-match version is too
+  false-positive-prone to be useful; doing it properly needs a rarity-weighted
+  similarity model, which is out of scope here.
