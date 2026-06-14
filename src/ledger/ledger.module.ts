@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PrismaService } from '../common/prisma.service';
 import { LedgerService } from './ledger.service';
 
 /**
@@ -7,7 +8,7 @@ import { LedgerService } from './ledger.service';
  * is what makes every escrow action reversible and every figure provable.
  */
 @Module({
-  providers: [LedgerService],
+  providers: [PrismaService, LedgerService],
   exports: [LedgerService],
 })
 export class LedgerModule {}

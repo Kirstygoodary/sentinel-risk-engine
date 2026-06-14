@@ -4,10 +4,6 @@
 // product. Money is tracked with a double-entry LEDGER (not a balance column)
 // so every movement is auditable and reversible — the property that matters
 // most in a fraud/payments system.
-//
-// [fill: as you design the engine, refine these models. The structure below is a
-//  starting frame — add/rename columns to match the decisions YOU make so you
-//  can defend every field. Re-derive any thresholds; don't transcribe.]
 
 generator client {
   provider = "prisma-client-js"
@@ -20,9 +16,9 @@ datasource db {
 
 /// An entity that transacts and accrues risk/trust over time.
 model Account {
-  id           String        @id @default(uuid())
-  externalRef  String        @unique // opaque id from the calling system
-  createdAt    DateTime      @default(now())
+  id          String   @id @default(uuid())
+  externalRef String   @unique // opaque id from the calling system
+  createdAt   DateTime @default(now())
 
   transactions Transaction[]
   escrowHolds  EscrowHold[]
@@ -31,97 +27,103 @@ model Account {
 
 /// A single money-moving event to be risk-scored.
 model Transaction {
-  id            String   @id @default(uuid())
-  accountId     String
-  account       Account  @relation(fields: [accountId], references: [id])
+  id          String   @id @default(uuid())
+  accountId   String
+  account     Account  @relation(fields: [accountId], references: [id])
 
-  amountMinor   BigInt   // minor units (e.g. pence) — never floats for money
-  currency      String   // ISO-4217
+  amountMinor BigInt // minor units (e.g. pence) — never floats for money
+  currency    String // ISO-4217
 
-  // [fill: the inbound signals you score on. e.g.
-  //   mlRiskLevel   String?   // NONE/LOW/MEDIUM/HIGH from a 3rd-party scorer
-  //   outcome        String?  // later ground truth: CLEAN / CHARGEBACK / REFUND
-  //   chargebackAt   DateTime?
-  // Pick what your four-signal model actually needs.]
+  // Inbound 3rd-party ML verdict (NONE/LOW/MEDIUM/HIGH), if any.
+  mlRiskLevel String?
 
-  createdAt     DateTime @default(now())
+  // Ground truth, set later by webhooks/outcomes: CLEAN / CHARGEBACK / REFUND.
+  outcome      String?
+  chargebackAt DateTime?
+  /// True if the chargeback landed AFTER the hold released (the worst case).
+  lateChargeback Boolean @default(false)
 
-  decision      RiskDecision?
-  escrowHold    EscrowHold?
+  createdAt DateTime @default(now())
+
+  decision   RiskDecision?
+  escrowHold EscrowHold?
 
   @@index([accountId, createdAt]) // history-window queries (MAD/Bayesian)
 }
 
 /// The engine's verdict for a transaction. Stored so it's auditable + explainable.
 model RiskDecision {
-  id             String      @id @default(uuid())
-  transactionId  String      @unique
-  transaction    Transaction @relation(fields: [transactionId], references: [id])
+  id            String      @id @default(uuid())
+  transactionId String      @unique
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
 
-  // [fill: the output of YOUR decision engine. e.g.
-  //   tier            String   // CLEAR/WATCH/T1/T2/T3
-  //   tierSource      String   // which signal drove it (ML/OUTLIER/BAYESIAN/GUARDRAIL)
-  //   reasonCode      String   // internal
-  //   humanReason     String   // creator-safe explanation (no raw scores leak)
-  //   shadow          Boolean  // was this scored in shadow mode (no action taken)
-  //   scoredAt        DateTime @default(now())
-  // ]
+  tier        String // CLEAR/WATCH/T1/T2/T3
+  tierSource  String // ML/OUTLIER/BAYESIAN/GUARDRAIL/DEFAULT
+  autoPause   Boolean @default(false)
+  reasonCode  String // internal audit code
+  humanReason String // creator-safe explanation (no raw scores)
+  /// Was this scored in shadow mode (verdict recorded, no action taken)?
+  shadow      Boolean @default(true)
 
-  createdAt      DateTime    @default(now())
+  createdAt DateTime @default(now())
 }
 
 /// Graduated, reversible enforcement: funds held for a tier-dependent duration.
 model EscrowHold {
-  id             String      @id @default(uuid())
-  accountId      String
-  account        Account     @relation(fields: [accountId], references: [id])
-  transactionId  String      @unique
-  transaction    Transaction @relation(fields: [transactionId], references: [id])
+  id            String      @id @default(uuid())
+  accountId     String
+  account       Account     @relation(fields: [accountId], references: [id])
+  transactionId String      @unique
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
 
-  amountMinor    BigInt
-  currency       String
+  amountMinor BigInt
+  currency    String
 
-  // [fill: the hold lifecycle. e.g.
-  //   status        String    // HELD / RELEASED / CANCELLED / PAID
-  //   tier          String?
-  //   holdDays      Int?
-  //   heldAt        DateTime  @default(now())
-  //   releaseAt     DateTime? // heldAt + tier duration
-  //   releasedAt    DateTime?
-  // ]
+  status     String    @default("HELD") // HELD / RELEASED / CANCELLED
+  tier       String?
+  holdDays   Int?
+  heldAt     DateTime  @default(now())
+  releaseAt  DateTime? // heldAt + tier duration
+  releasedAt DateTime?
 
-  createdAt      DateTime    @default(now())
+  createdAt DateTime @default(now())
 
   @@index([accountId])
+  @@index([status, releaseAt]) // the release cron's query
 }
 
 /// Auto-pause for repeat offenders; lifts via the rehab path. Reversible.
 model AccountPause {
-  id         String    @id @default(uuid())
-  accountId  String
-  account    Account   @relation(fields: [accountId], references: [id])
+  id        String  @id @default(uuid())
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id])
 
-  // [fill: source (AUTO_BAYESIAN / AUTO_GUARDRAIL / MANUAL), reason (humanized by
-  //  source, never raw), active flag, clearedAt for the rehab lift.]
+  source    String // AUTO_BAYESIAN / AUTO_GUARDRAIL / MANUAL
+  reason    String // humanized by source, never raw
+  active    Boolean @default(true)
+  clearedAt DateTime?
 
-  createdAt  DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  @@index([accountId])
+  @@index([accountId, active])
 }
 
-/// Double-entry ledger. Every money movement = balanced debit+credit rows.
+/// Double-entry ledger. Every money movement = balanced debit+credit rows
+/// sharing a groupId. Balances are DERIVED by summing entries, never stored.
 /// This is what makes the money path auditable and every action reversible.
 model LedgerEntry {
-  id            String   @id @default(uuid())
+  id          String   @id @default(uuid())
+  /// Groups the balanced pair (and any multi-leg posting) for one event.
+  groupId     String
+  /// Logical bucket, e.g. "account:<id>:escrow" / "account:<id>:available".
+  bucket      String
+  direction   String // DEBIT / CREDIT
+  amountMinor BigInt
+  currency    String
+  reason      String // HOLD / RELEASE / CANCEL / PAYOUT
 
-  // [fill: the double-entry shape you choose. Classic minimal form:
-  //   transactionId String   // groups the balanced pair
-  //   account       String   // logical bucket e.g. "account:escrow" / "account:available"
-  //   direction     String   // DEBIT / CREDIT
-  //   amountMinor   BigInt
-  //   currency      String
-  //   reason        String   // HOLD / RELEASE / CANCEL / PAYOUT
-  // Invariant to enforce + TEST: debits == credits per transactionId.]
+  createdAt DateTime @default(now())
 
-  createdAt     DateTime @default(now())
+  @@index([groupId])
+  @@index([bucket])
 }
